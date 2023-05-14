@@ -18,9 +18,9 @@
 from __future__ import print_function
 
 import numpy as np
-import shapely
-import math
 from filterpy.kalman import KalmanFilter
+from shapely.geometry import Polygon
+from shapely import affinity
 
 def linear_assignment(cost_matrix):
   try:
@@ -32,139 +32,29 @@ def linear_assignment(cost_matrix):
     x, y = linear_sum_assignment(cost_matrix)
     return np.array(list(zip(x, y)))
 
-def iou(bb_test, bb_gt):
-    """
-    Computes IoU between two bboxes in the form [x1,y1,x2,y2]
-    """
-    xx1 = np.maximum(bb_test[0], bb_gt[0])
-    yy1 = np.maximum(bb_test[1], bb_gt[1])
-    xx2 = np.minimum(bb_test[2], bb_gt[2])
-    yy2 = np.minimum(bb_test[3], bb_gt[3])
-    w = np.maximum(0., xx2 - xx1)
-    h = np.maximum(0., yy2 - yy1)
-    wh = w * h
-    o = wh / ((bb_test[2] - bb_test[0]) * (bb_test[3] - bb_test[1])
-              + (bb_gt[2] - bb_gt[0]) * (bb_gt[3] - bb_gt[1]) - wh)
-    return (o)
-
-
 def iou_rotated_bbox(bb_test, bb_gt):
-    poly1 = shapely.geometry.Polygon(bb_test[0])
-    poly2 = shapely.geometry.Polygon(bb_gt[0])
+    poly1 = state2polygon(bb_test)
+    poly2 = state2polygon(bb_gt)
     intersection = poly1.intersection(poly2).area
     union = poly1.union(poly2).area
     return intersection / union
 
+def state2polygon(state) -> Polygon:
+    ratio = np.maximum(0.0, state[3])
+    width = np.sqrt(state[2]*ratio)
+    height = width / state[3]
+    center_x = state[0]
+    center_y = state[1]
+    angle = state[4]
 
-def convert_rotated_bbox_to_z(bbox):
-    """
-        Takes a bounding box in the form of tuple of 4 points (since bbox is a closed polygon) and a center
-        param bbox:
-                    (array([[147.80796863,  92.84082902],
-                            [259.70485518,  89.8615603 ],
-                            [260.11260822, 105.17615596],
-                            [148.21572167, 108.15542468],
-                            [147.80796863,  92.84082902]]), array([203.96028842,  99.00849249]))
+    # Create a rectangle polygon centered at the origin
+    rect = Polygon([(-width/2, -height/2), (-width/2, height/2), (width/2, height/2), (width/2, -height/2)])
 
-        and returns z in the form
-        [x,y,s,r,a] where x,y is the center of the box and s is the scale/area and r is
-        the aspect ratio and a is an angle of rotation
-    """
+    # Rotate the polygon by the angle
+    rotated_rect = affinity.rotate(rect, angle, use_radians=True)
 
-    poly_bbox = shapely.geometry.Polygon(bbox[0])
-
-    # bbox center
-    center_x = bbox[1][0]
-    center_y = bbox[1][1]
-
-    # area
-    area = poly_bbox.area()
-
-    # aspect ratio
-    x0, y0 = poly_bbox.exterior.coords[0]
-    x1, y1 = poly_bbox.exterior.coords[1]
-    h = math.hypot(x1 - x0, y1 - y0)
-
-    x2, y2 = poly_bbox.exterior.coords[2]
-    w = math.hypot(x2 - x1, y2 - y1)
-
-    aspect_ratio = w / h
-
-    # angle
-    x1 = x1 - x0
-    y1 = y1 - y0
-    vecnorm = np.sqrt(x1 ** 2 + y1 ** 2)
-    x1 = x1 / vecnorm
-    y1 = y1 / vecnorm
-    cos_angle = x1 + y1
-    angle = np.arccos(cos_angle)
-
-    return np.array([center_x, center_y, area, aspect_ratio, angle]).reshape((5, 1))
-
-
-def convert_bbox_to_z(bbox):
-    """
-    Takes a bounding box in the form [x1,y1,x2,y2] and returns z in the form
-      [x,y,s,r] where x,y is the centre of the box and s is the scale/area and r is
-      the aspect ratio
-    """
-    w = bbox[2] - bbox[0]
-    h = bbox[3] - bbox[1]
-    x = bbox[0] + w / 2.
-    y = bbox[1] + h / 2.
-    s = w * h  # scale is just area
-    r = w / float(h)
-    return np.array([x, y, s, r]).reshape((4, 1))
-
-
-def convert_z_to_rotated_bbox(z, score=None):
-    w = np.sqrt(z[2] * z[3])
-    h = z[2] / w
-
-    x0 = z[0] - w / 2
-    y0 = z[1] + w / 2
-
-    x1 = z[0] + w / 2
-    y1 = z[1] + w / 2
-
-    x2 = z[0] + w / 2
-    y2 = z[1] - w / 2
-
-    x3 = z[0] - w / 2
-    y3 = z[1] - w / 2
-
-    bbox = [[x0, y0],
-            [x1, y1],
-            [x2, y2],
-            [x3, y3]]
-
-    bbox = np.array([np.array(i) for i in bbox])
-    bbox = shapely.geometry.Polygon(bbox)
-
-    angle = z[4]
-    bbox = shapely.affinity.rotate(bbox, angle, use_radians=True, origin="centroid")
-    center = np.array(bbox.centroid.coords[0])
-    bbox = np.array(bbox.exterior.coords)
-
-    bbox = (bbox, center)
-
-    if score is None:
-        return bbox, None
-    else:
-        return bbox, score
-
-
-def convert_x_to_bbox(x, score=None):
-    """
-    Takes a bounding box in the centre form [x,y,s,r] and returns it in the form
-      [x1,y1,x2,y2] where x1,y1 is the top left and x2,y2 is the bottom right
-    """
-    w = np.sqrt(x[2] * x[3])
-    h = x[2] / w
-    if (score == None):
-        return np.array([x[0] - w / 2., x[1] - h / 2., x[0] + w / 2., x[1] + h / 2.]).reshape((1, 4))
-    else:
-        return np.array([x[0] - w / 2., x[1] - h / 2., x[0] + w / 2., x[1] + h / 2., score]).reshape((1, 5))
+    # Translate the polygon to the center coordinates
+    return affinity.translate(rotated_rect, center_x, center_y)    
 
 
 class KalmanBoxTracker(object):
@@ -173,7 +63,7 @@ class KalmanBoxTracker(object):
     """
     count = 0
 
-    def __init__(self, bbox):
+    def __init__(self, z):
         """
         Initialises a tracker using initial bounding box.
         """
@@ -202,7 +92,7 @@ class KalmanBoxTracker(object):
         self.kf.Q[-1, -1] *= 0.01
         self.kf.Q[5:, 5:] *= 0.01
 
-        self.kf.x[:5] = convert_rotated_bbox_to_z(bbox)
+        self.kf.x[:5] = np.expand_dims(z, axis=1)
 
         self.time_since_update = 0
         self.id = KalmanBoxTracker.count
@@ -212,15 +102,15 @@ class KalmanBoxTracker(object):
         self.hit_streak = 0
         self.age = 0
 
-    def update(self, bbox):
+    def update(self, z):
         """
-        Updates the state vector with observed bbox.
+        Updates the state vector with observed z.
         """
         self.time_since_update = 0
         self.history = []
         self.hits += 1
         self.hit_streak += 1
-        self.kf.update(convert_rotated_bbox_to_z(bbox))
+        self.kf.update(z)
 
     def predict(self):
         """
@@ -233,14 +123,14 @@ class KalmanBoxTracker(object):
         if (self.time_since_update > 0):
             self.hit_streak = 0
         self.time_since_update += 1
-        self.history.append(convert_z_to_rotated_bbox(self.kf.x))
+        self.history.append(self.kf.x[:5])
         return self.history[-1]
 
     def get_state(self):
         """
         Returns the current bounding box estimate.
         """
-        return convert_z_to_rotated_bbox(self.kf.x)
+        return self.kf.x[:5]
 
 
 def associate_detections_to_trackers(detections, trackers, iou_threshold=0.3):
@@ -293,6 +183,8 @@ class Sort(object):
         self.iou_threshold = iou_threshold
         self.trackers = []
         self.frame_count = 0
+        self.dim_z = 5
+        self.dim_trk_out = self.dim_z + 1 # some of the states + trk ID
 
     def update(self, dets):
         """
@@ -309,8 +201,8 @@ class Sort(object):
         to_del = []
         ret = []
         for t, trk in enumerate(trks):
-            pos = self.trackers[t].predict()[0]
-            trk[:] = [pos[0], pos[1], pos[2], pos[3], 0]
+            pos = self.trackers[t].predict()
+            trk[:] = [pos[0], pos[1], pos[2], pos[3], pos[4]]
             if (np.any(np.isnan(pos))):
                 to_del.append(t)
         trks = np.ma.compress_rows(np.ma.masked_invalid(trks))
@@ -330,13 +222,13 @@ class Sort(object):
             self.trackers.append(trk)
         i = len(self.trackers)
         for trk in reversed(self.trackers):
-            d = trk.get_state()[0]
+            d = trk.get_state()
             if ((trk.time_since_update < 1) and (trk.hit_streak >= self.min_hits or self.frame_count <= self.min_hits)):
-                ret.append(np.concatenate((d, [trk.id + 1])).reshape(1, -1))  # +1 as MOT benchmark requires positive
+                ret.append(np.append(d, trk.id + 1).reshape(1, -1))  # +1 as MOT benchmark requires positive
             i -= 1
             # remove dead tracklet
             if (trk.time_since_update > self.max_age):
                 self.trackers.pop(i)
         if (len(ret) > 0):
             return np.concatenate(ret)
-        return np.empty((0, 5))
+        return np.empty((0, 6))
