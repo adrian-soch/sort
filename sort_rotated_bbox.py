@@ -146,7 +146,15 @@ def associate_detections_to_trackers(detections, trackers, iou_threshold=0.3):
     for d, det in enumerate(detections):
         for t, trk in enumerate(trackers):
             iou_matrix[d, t] = iou_rotated_bbox(det, trk)
-    matched_indices = linear_assignment(-iou_matrix)
+    
+    if min(iou_matrix.shape) > 0:
+        a = (iou_matrix > iou_threshold).astype(np.int32)
+        if a.sum(1).max() == 1 and a.sum(0).max() == 1:
+            matched_indices = np.stack(np.where(a), axis=1)
+        else:
+            matched_indices = linear_assignment(-iou_matrix)
+    else:
+        matched_indices = np.empty(shape=(0,2))
 
     unmatched_detections = []
     for d, det in enumerate(detections):
