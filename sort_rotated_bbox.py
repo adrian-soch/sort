@@ -68,23 +68,24 @@ class KalmanBoxTracker(object):
         Initialises a tracker using initial bounding box.
         """
         # define constant velocity model
-        self.kf = KalmanFilter(dim_x=8, dim_z=5)
+        self.kf = KalmanFilter(dim_x=9, dim_z=5)
 
-        self.kf.F = np.array([[1, 0, 0, 0, 0, 1, 0, 0],
-                              [0, 1, 0, 0, 0, 0, 1, 0],
-                              [0, 0, 1, 0, 0, 0, 0, 1],
-                              [0, 0, 0, 1, 0, 0, 0, 0],
-                              [0, 0, 0, 0, 1, 0, 0, 0],
-                              [0, 0, 0, 0, 0, 1, 0, 0],
-                              [0, 0, 0, 0, 0, 0, 1, 0],
-                              [0, 0, 0, 0, 0, 0, 0, 1]])
+        self.kf.F = np.array([[1, 0, 0, 0, 0, 1, 0, 0, 0],
+                              [0, 1, 0, 0, 0, 0, 1, 0, 0],
+                              [0, 0, 1, 0, 0, 0, 0, 1, 0],
+                              [0, 0, 0, 1, 0, 0, 0, 0, 0],
+                              [0, 0, 0, 0, 1, 0, 0, 0, 1],
+                              [0, 0, 0, 0, 0, 1, 0, 0, 0],
+                              [0, 0, 0, 0, 0, 0, 1, 0, 0],
+                              [0, 0, 0, 0, 0, 0, 0, 1, 0],
+                              [0, 0, 0, 0, 0, 0, 0, 0, 1]])
 
         self.kf.H = np.array(
-            [[1, 0, 0, 0, 0, 0, 0, 0],
-             [0, 1, 0, 0, 0, 0, 0, 0],
-             [0, 0, 1, 0, 0, 0, 0, 0],
-             [0, 0, 0, 1, 0, 0, 0, 0],
-             [0, 0, 0, 0, 1, 0, 0, 0]])
+            [[1, 0, 0, 0, 0, 0, 0, 0, 0],
+             [0, 1, 0, 0, 0, 0, 0, 0, 0],
+             [0, 0, 1, 0, 0, 0, 0, 0, 0],
+             [0, 0, 0, 1, 0, 0, 0, 0, 0],
+             [0, 0, 0, 0, 1, 0, 0, 0, 0]])
 
         self.kf.R[2:, 2:] *= 10.
         self.kf.P[5:, 5:] *= 1000.  # give high uncertainty to the unobservable initial velocities
@@ -117,6 +118,7 @@ class KalmanBoxTracker(object):
         Advances the state vector and returns the predicted bounding box estimate.
         """
         # If area + velocity of the area is negative, make the velovity negative
+        # this needs to be done for any state that must be != 0
         if ((self.kf.x[7] + self.kf.x[2]) <= 0):
             self.kf.x[7] *= 0.0
         self.kf.predict()
