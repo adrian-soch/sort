@@ -70,10 +70,10 @@ class KalmanBoxTracker(object):
         # define constant velocity model
         self.kf = KalmanFilter(dim_x=8, dim_z=5)
 
-        self.kf.F = np.array([[1, 0, 0, 0, 1, 0, 0, 0],
-                              [0, 1, 0, 0, 0, 1, 0, 0],
-                              [0, 0, 1, 0, 0, 0, 1, 0],
-                              [0, 0, 0, 1, 0, 0, 0, 1],
+        self.kf.F = np.array([[1, 0, 0, 0, 0, 1, 0, 0],
+                              [0, 1, 0, 0, 0, 0, 1, 0],
+                              [0, 0, 1, 0, 0, 0, 0, 1],
+                              [0, 0, 0, 1, 0, 0, 0, 0],
                               [0, 0, 0, 0, 1, 0, 0, 0],
                               [0, 0, 0, 0, 0, 1, 0, 0],
                               [0, 0, 0, 0, 0, 0, 1, 0],
@@ -116,8 +116,9 @@ class KalmanBoxTracker(object):
         """
         Advances the state vector and returns the predicted bounding box estimate.
         """
-        if ((self.kf.x[6] + self.kf.x[2]) <= 0):
-            self.kf.x[6] *= 0.0
+        # If area + velocity of the area is negative, make the velovity negative
+        if ((self.kf.x[7] + self.kf.x[2]) <= 0):
+            self.kf.x[7] *= 0.0
         self.kf.predict()
         self.age += 1
         if (self.time_since_update > 0):
