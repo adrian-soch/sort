@@ -22,15 +22,17 @@ from filterpy.kalman import KalmanFilter
 from shapely.geometry import Polygon
 from shapely import affinity
 
+
 def linear_assignment(cost_matrix):
-  try:
-    import lap
-    _, x, y = lap.lapjv(cost_matrix, extend_cost=True)
-    return np.array([[y[i],i] for i in x if i >= 0]) #
-  except ImportError:
-    from scipy.optimize import linear_sum_assignment
-    x, y = linear_sum_assignment(cost_matrix)
-    return np.array(list(zip(x, y)))
+    try:
+        import lap
+        _, x, y = lap.lapjv(cost_matrix, extend_cost=True)
+        return np.array([[y[i], i] for i in x if i >= 0])
+    except ImportError:
+        from scipy.optimize import linear_sum_assignment
+        x, y = linear_sum_assignment(cost_matrix)
+        return np.array(list(zip(x, y)))
+
 
 def iou_rotated_bbox(bb_test, bb_gt):
     poly1 = state2polygon(bb_test)
@@ -38,6 +40,7 @@ def iou_rotated_bbox(bb_test, bb_gt):
     intersection = poly1.intersection(poly2).area
     union = poly1.union(poly2).area
     return intersection / union
+
 
 def state2polygon(state) -> Polygon:
     ratio = np.maximum(0.0, state[3])
@@ -48,13 +51,14 @@ def state2polygon(state) -> Polygon:
     angle = state[4]
 
     # Create a rectangle polygon centered at the origin
-    rect = Polygon([(-width/2, -height/2), (-width/2, height/2), (width/2, height/2), (width/2, -height/2)])
+    rect = Polygon([(-width/2, -height/2), (-width/2, height/2),
+                   (width/2, height/2), (width/2, -height/2)])
 
     # Rotate the polygon by the angle
     rotated_rect = affinity.rotate(rect, angle, use_radians=True)
 
     # Translate the polygon to the center coordinates
-    return affinity.translate(rotated_rect, center_x, center_y)    
+    return affinity.translate(rotated_rect, center_x, center_y)
 
 
 class KalmanBoxTracker(object):
@@ -149,7 +153,7 @@ def associate_detections_to_trackers(detections, trackers, iou_threshold=0.3):
     for d, det in enumerate(detections):
         for t, trk in enumerate(trackers):
             iou_matrix[d, t] = iou_rotated_bbox(det, trk)
-    
+
     if min(iou_matrix.shape) > 0:
         a = (iou_matrix > iou_threshold).astype(np.int32)
         if a.sum(1).max() == 1 and a.sum(0).max() == 1:
@@ -157,7 +161,7 @@ def associate_detections_to_trackers(detections, trackers, iou_threshold=0.3):
         else:
             matched_indices = linear_assignment(-iou_matrix)
     else:
-        matched_indices = np.empty(shape=(0,2))
+        matched_indices = np.empty(shape=(0, 2))
 
     unmatched_detections = []
     for d, det in enumerate(detections):
@@ -195,7 +199,7 @@ class Sort(object):
         self.trackers = []
         self.frame_count = 0
         self.dim_z = 5
-        self.dim_trk_out = self.dim_z + 1 # some of the states + trk ID
+        self.dim_trk_out = self.dim_z + 1  # some of the states + trk ID
 
     def update(self, dets):
         """
@@ -219,7 +223,8 @@ class Sort(object):
         trks = np.ma.compress_rows(np.ma.masked_invalid(trks))
         for t in reversed(to_del):
             self.trackers.pop(t)
-        matched, unmatched_dets, unmatched_trks = associate_detections_to_trackers(dets, trks, self.iou_threshold)
+        matched, unmatched_dets, unmatched_trks = associate_detections_to_trackers(
+            dets, trks, self.iou_threshold)
 
         # update matched trackers with assigned detections
         for t, trk in enumerate(self.trackers):
@@ -235,7 +240,8 @@ class Sort(object):
         for trk in reversed(self.trackers):
             d = trk.get_state()
             if ((trk.time_since_update < 1) and (trk.hit_streak >= self.min_hits or self.frame_count <= self.min_hits)):
-                ret.append(np.append(d, trk.id + 1).reshape(1, -1))  # +1 as MOT benchmark requires positive
+                # +1 as MOT benchmark requires positive
+                ret.append(np.append(d, trk.id + 1).reshape(1, -1))
             i -= 1
             # remove dead tracklet
             if (trk.time_since_update > self.max_age):
