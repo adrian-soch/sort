@@ -20,7 +20,9 @@ from __future__ import print_function
 import numpy as np
 from filterpy.kalman import KalmanFilter
 from shapely.geometry import Polygon
-from shapely import affinity
+from shapely import affinity, vectorized
+
+import timeit
 
 
 def linear_assignment(cost_matrix):
@@ -59,6 +61,103 @@ def state2polygon(state) -> Polygon:
 
     # Translate the polygon to the center coordinates
     return affinity.translate(rotated_rect, center_x, center_y)
+
+
+def iou_rotated_bbox_matrix(bb_test_batch, bb_gt_batch):
+    # Assume that bb_test_batch and bb_gt_batch are numpy arrays of shape (M, 5) and (N, 5)
+    # where M and N are the batch sizes and 5 is the number of state parameters
+    # Return a numpy array of shape (M, N) containing the IoU values for each pair of bounding boxes
+
+    # Convert the state parameters to polygon objects using vectorized operations
+    ratio = np.maximum(0.0, bb_test_batch[:, 3])
+    width = np.sqrt(bb_test_batch[:, 2] * ratio)
+    height = width / bb_test_batch[:, 3]
+    center_x = bb_test_batch[:, 0]
+    center_y = bb_test_batch[:, 1]
+    angle = bb_test_batch[:, 4]
+
+    # Create a rectangle polygon centered at the origin
+    rect = Polygon([(-0.5, -0.5), (-0.5, 0.5), (0.5, 0.5), (0.5, -0.5)])
+
+    # Rotate and translate the rectangle polygon for each bounding box
+    poly1 = [affinity.translate(affinity.rotate(
+        rect, a, use_radians=True), x, y) for x, y, a in zip(center_x, center_y, angle)]
+
+    # Repeat the same process for the ground truth bounding boxes
+    ratio = np.maximum(0.0, bb_gt_batch[:, 3])
+    width = np.sqrt(bb_gt_batch[:, 2] * ratio)
+    height = width / bb_gt_batch[:, 3]
+    center_x = bb_gt_batch[:, 0]
+    center_y = bb_gt_batch[:, 1]
+    angle = bb_gt_batch[:, 4]
+
+    rect = Polygon([(-0.5, -0.5), (-0.5, 0.5), (0.5, 0.5), (0.5, -0.5)])
+    poly2 = [affinity.translate(affinity.rotate(
+        rect, a, use_radians=True), x, y) for x, y, a in zip(center_x, center_y, angle)]
+
+    # Initialize an empty matrix to store the IoU values
+    iou_matrix = np.zeros((len(poly1), len(poly2)))
+
+    # Loop over each pair of polygons and compute the intersection and union areas
+    for i in range(len(poly1)):
+        for j in range(len(poly2)):
+            intersection = poly1[i].intersection(poly2[j]).area
+            union = poly1[i].union(poly2[j]).area
+            iou_matrix[i][j] = intersection / union
+
+    # Return the IoU matrix
+    return iou_matrix
+
+
+def iou_rotated_bbox_matrix_optimized(bb_test_batch, bb_gt_batch):
+    # Assume that bb_test_batch and bb_gt_batch are numpy arrays of shape (M, 5) and (N, 5)
+    # where M and N are the batch sizes and 5 is the number of state parameters
+    # Return a numpy array of shape (M, N) containing the IoU values for each pair of bounding boxes
+
+    # Convert the state parameters to polygon objects using vectorized operations
+    ratio = np.maximum(0.0, bb_test_batch[:, 3])
+    width = np.sqrt(bb_test_batch[:, 2] * ratio)
+    height = width / bb_test_batch[:, 3]
+    center_x = bb_test_batch[:, 0]
+    center_y = bb_test_batch[:, 1]
+    angle = bb_test_batch[:, 4]
+
+    # Create a rectangle polygon centered at the origin
+    rect = Polygon([(-0.5, -0.5), (-0.5, 0.5), (0.5, 0.5), (0.5, -0.5)])
+
+    # Rotate and translate the rectangle polygon for each bounding box
+    # Use list comprehensions instead of loops to create a list of polygons
+    poly1 = [affinity.translate(affinity.rotate(
+        rect, a, use_radians=True), x, y) for x, y, a in zip(center_x, center_y, angle)]
+
+    # Repeat the same process for the ground truth bounding boxes
+    ratio = np.maximum(0.0, bb_gt_batch[:, 3])
+    width = np.sqrt(bb_gt_batch[:, 2] * ratio)
+    height = width / bb_gt_batch[:, 3]
+    center_x = bb_gt_batch[:, 0]
+    center_y = bb_gt_batch[:, 1]
+    angle = bb_gt_batch[:, 4]
+
+    rect = Polygon([(-0.5, -0.5), (-0.5, 0.5), (0.5, 0.5), (0.5, -0.5)])
+    poly2 = [affinity.translate(affinity.rotate(
+        rect, a, use_radians=True), x, y) for x, y, a in zip(center_x, center_y, angle)]
+
+    # Initialize an empty matrix to store the IoU values
+    iou_matrix = np.zeros((len(poly1), len(poly2)))
+
+    # Loop over each pair of polygons and compute the intersection and union areas
+    # Use numpy vectorization instead of nested loops to calculate the areas
+    # Use shapely.vectorized functions instead of shapely.geometry functions to operate on arrays of polygons
+    intersection = vectorized.intersects(poly1, poly2).astype(
+        float) * vectorized.intersection_area(poly1, poly2)
+    union = vectorized.union_area(poly1, poly2)
+
+    # Avoid division by zero by adding a small epsilon value to the denominator
+    epsilon = 1e-10
+    iou_matrix = intersection / (union + epsilon)
+
+    # Return the IoU matrix
+    return iou_matrix
 
 
 class KalmanBoxTracker(object):
@@ -153,6 +252,10 @@ def associate_detections_to_trackers(detections, trackers, iou_threshold=0.3):
     for d, det in enumerate(detections):
         for t, trk in enumerate(trackers):
             iou_matrix[d, t] = iou_rotated_bbox(det, trk)
+
+    # iou_matrix = iou_rotated_bbox_matrix(detections, trackers)
+
+    # iou_matrix23 = iou_rotated_bbox_matrix_optimized(detections, trackers)
 
     if min(iou_matrix.shape) > 0:
         a = (iou_matrix > iou_threshold).astype(np.int32)
