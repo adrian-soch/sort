@@ -259,10 +259,6 @@ def associate_detections_to_trackers(detections, trackers, iou_threshold=0.3):
         for t in range(len(trackers)):
             iou_matrix[d, t] = iou_rotated_bbox(det_poly_array[d], trk_poly_array[t])
 
-    # iou_matrix = iou_rotated_bbox_matrix(detections, trackers)
-
-    # iou_matrix23 = iou_rotated_bbox_matrix_optimized(detections, trackers)
-
     if min(iou_matrix.shape) > 0:
         a = (iou_matrix > iou_threshold).astype(np.int32)
         if a.sum(1).max() == 1 and a.sum(0).max() == 1:
