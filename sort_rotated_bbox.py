@@ -36,9 +36,7 @@ def linear_assignment(cost_matrix):
         return np.array(list(zip(x, y)))
 
 
-def iou_rotated_bbox(bb_test, bb_gt):
-    poly1 = state2polygon(bb_test)
-    poly2 = state2polygon(bb_gt)
+def iou_rotated_bbox(poly1, poly2):
     intersection = poly1.intersection(poly2).area
     union = poly1.union(poly2).area
     return intersection / union
@@ -46,15 +44,15 @@ def iou_rotated_bbox(bb_test, bb_gt):
 
 def state2polygon(state) -> Polygon:
     ratio = np.maximum(0.0, state[3])
-    width = np.sqrt(state[2]*ratio)
-    height = width / state[3]
+    half_width = np.sqrt(state[2]*ratio)/2.0
+    half_height = (half_width*2 / state[3])/2.0
     center_x = state[0]
     center_y = state[1]
     angle = state[4]
 
     # Create a rectangle polygon centered at the origin
-    rect = Polygon([(-width/2, -height/2), (-width/2, height/2),
-                   (width/2, height/2), (width/2, -height/2)])
+    rect = Polygon([(-half_width, -half_height), (-half_width, half_height),
+                   (half_width, half_height), (half_width, -half_height)])
 
     # Rotate the polygon by the angle
     rotated_rect = affinity.rotate(rect, angle, use_radians=True)
@@ -249,9 +247,17 @@ def associate_detections_to_trackers(detections, trackers, iou_threshold=0.3):
         return np.empty((0, 2), dtype=int), np.arange(len(detections)), np.empty((0, 5), dtype=int)
     iou_matrix = np.zeros((len(detections), len(trackers)), dtype=np.float32)
 
-    for d, det in enumerate(detections):
-        for t, trk in enumerate(trackers):
-            iou_matrix[d, t] = iou_rotated_bbox(det, trk)
+    det_poly_array = []
+    for det in detections:
+        det_poly_array.append(state2polygon(det))
+
+    trk_poly_array = []
+    for trk in trackers:
+        trk_poly_array.append(state2polygon(trk))
+
+    for d in range(len(detections)):
+        for t in range(len(trackers)):
+            iou_matrix[d, t] = iou_rotated_bbox(det_poly_array[d], trk_poly_array[t])
 
     # iou_matrix = iou_rotated_bbox_matrix(detections, trackers)
 
