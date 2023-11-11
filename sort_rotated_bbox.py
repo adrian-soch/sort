@@ -26,10 +26,12 @@ def linear_assignment(cost_matrix):
     _, x, y = lapjv(cost_matrix, extend_cost=True)
     return np.array([[y[i], i] for i in x if i >= 0])
 
+
 def iou_rotated_bbox(poly1, poly2):
     intersection = poly1.intersection(poly2).area
     union = poly1.union(poly2).area
     return intersection / union
+
 
 def state2polygon(state) -> Polygon:
     ratio = np.maximum(0.0, state[3])
@@ -56,18 +58,22 @@ class KalmanBoxTracker(object):
     """
     count = 0
 
-    def __init__(self, z):
+    def __init__(self, z, dt=0.1):
         """
         Initialises a tracker using initial bounding box.
         """
         # define constant velocity model
         self.kf = KalmanFilter(dim_x=9, dim_z=5)
 
-        self.kf.F = np.array([[1, 0, 0, 0, 0, 1, 0, 0, 0],
-                              [0, 1, 0, 0, 0, 0, 1, 0, 0],
-                              [0, 0, 1, 0, 0, 0, 0, 1, 0],
+        self.P_X, self.P_Y, self.AREA, self.RATIO, self.YAW, self.V_X, self.V_Y = range(7)
+        # state_vec = [x_pos, y_pos, x*y, w/h, yaw_angle, x_vel, y_vel]^T
+
+        # why is area a constant velocity model?
+        self.kf.F = np.array([[1, 0, 0, 0, 0, dt, 0, 0, 0],
+                              [0, 1, 0, 0, 0, 0, dt, 0, 0],
+                              [0, 0, 1, 0, 0, 0, 0, dt, 0],
                               [0, 0, 0, 1, 0, 0, 0, 0, 0],
-                              [0, 0, 0, 0, 1, 0, 0, 0, 1],
+                              [0, 0, 0, 0, 1, 0, 0, 0, dt],
                               [0, 0, 0, 0, 0, 1, 0, 0, 0],
                               [0, 0, 0, 0, 0, 0, 1, 0, 0],
                               [0, 0, 0, 0, 0, 0, 0, 1, 0],
@@ -95,6 +101,7 @@ class KalmanBoxTracker(object):
         self.hits = 0
         self.hit_streak = 0
         self.age = 0
+        self.initialized = False
 
     def update(self, z):
         """
@@ -119,14 +126,14 @@ class KalmanBoxTracker(object):
         if (self.time_since_update > 0):
             self.hit_streak = 0
         self.time_since_update += 1
-        self.history.append(self.kf.x[:5])
+        self.history.append(self.kf.x)
         return self.history[-1]
 
     def get_state(self):
         """
-        Returns the current bounding box estimate.
+        Returns the current state vector estimate.
         """
-        return self.kf.x[:5]
+        return self.kf.x[:]
 
 
 def associate_detections_to_trackers(detections, trackers, iou_threshold=0.3):
@@ -149,7 +156,8 @@ def associate_detections_to_trackers(detections, trackers, iou_threshold=0.3):
 
     for d in range(len(detections)):
         for t in range(len(trackers)):
-            iou_matrix[d, t] = iou_rotated_bbox(det_poly_array[d], trk_poly_array[t])
+            iou_matrix[d, t] = iou_rotated_bbox(
+                det_poly_array[d], trk_poly_array[t])
 
     if min(iou_matrix.shape) > 0:
         a = (iou_matrix > iou_threshold).astype(np.int32)
@@ -186,17 +194,23 @@ def associate_detections_to_trackers(detections, trackers, iou_threshold=0.3):
 
 
 class Sort(object):
-    def __init__(self, max_age=1, min_hits=3, iou_threshold=0.01):
+    def __init__(self, max_age=1, min_hits=3, iou_threshold=0.3, dt=0.1, output_unmatched=False):
         """
         Sets key parameters for SORT
         """
         self.max_age = max_age
+        self.max_output_age = 0
         self.min_hits = min_hits
         self.iou_threshold = iou_threshold
         self.trackers = []
         self.frame_count = 0
         self.dim_z = 5
-        self.dim_trk_out = self.dim_z + 1  # some of the states + trk ID
+        self.dt = dt
+
+        # When true Kalman predict results will be included in the output
+        # Otherwise only detectons with a match on the current frame will be returned
+        if output_unmatched:
+            self.max_output_age = self.max_age
 
     def update(self, dets):
         """
@@ -214,7 +228,8 @@ class Sort(object):
         ret = []
         for t, trk in enumerate(trks):
             pos = self.trackers[t].predict()
-            trk[:] = np.array((pos[0], pos[1], pos[2], pos[3], pos[4])).reshape (-1,)
+            trk[:] = np.array(
+                (pos[0], pos[1], pos[2], pos[3], pos[4])).reshape(-1,)
             if (np.any(np.isnan(pos))):
                 to_del.append(t)
         trks = np.ma.compress_rows(np.ma.masked_invalid(trks))
@@ -231,18 +246,22 @@ class Sort(object):
 
         # create and initialise new trackers for unmatched detections
         for i in unmatched_dets:
-            trk = KalmanBoxTracker(dets[i, :])
+            trk = KalmanBoxTracker(dets[i, :], dt=self.dt)
             self.trackers.append(trk)
         i = len(self.trackers)
         for trk in reversed(self.trackers):
-            d = trk.get_state()
-            if ((trk.time_since_update < 1) and (trk.hit_streak >= self.min_hits or self.frame_count <= self.min_hits)):
-                # +1 as MOT benchmark requires positive
-                ret.append(np.append(d, trk.id + 1).reshape(1, -1))
+            state = trk.get_state()
+            if ((trk.time_since_update <= self.max_output_age) and (trk.hit_streak >= self.min_hits or self.frame_count <= self.min_hits or trk.initialized)):
+                # Track is iniliated after min consecutive hits
+                trk.initialized = True
+    
+                output = np.array([state[trk.P_X] , state[trk.P_Y], state[trk.AREA], state[trk.RATIO], state[trk.YAW]])
+                # +1 to the ID as MOT benchmark 1-based index
+                ret.append(np.append(output, trk.id + 1).reshape(1, -1))
             i -= 1
             # remove dead tracklet
             if (trk.time_since_update > self.max_age):
                 self.trackers.pop(i)
         if (len(ret) > 0):
             return np.concatenate(ret)
-        return np.empty((0, 6))
+        return np.empty((0, self.dim_z + 1))
