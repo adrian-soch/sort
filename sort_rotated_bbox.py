@@ -35,8 +35,9 @@ def iou_rotated_bbox(poly1, poly2):
 
 def state2polygon(state) -> Polygon:
     ratio = np.maximum(0.0, state[3])
-    half_width = np.sqrt(state[2]*ratio)/2.0
-    half_height = (half_width*2 / state[3])/2.0
+    area = np.maximum(0.0, state[2])
+    half_width = np.sqrt(area*ratio)/2.0
+    half_height = (half_width*2 / ratio)/2.0
     center_x = state[0]
     center_y = state[1]
     angle = state[4]
@@ -58,41 +59,45 @@ class KalmanBoxTracker(object):
     """
     count = 0
 
-    def __init__(self, z, dt=0.1):
+    def __init__(self, z, dt=0.1, dim_z=1):
         """
         Initialises a tracker using initial bounding box.
         """
         # define constant velocity model
-        self.kf = KalmanFilter(dim_x=9, dim_z=5)
+        self.kf = KalmanFilter(dim_x=10, dim_z=dim_z)
 
-        self.P_X, self.P_Y, self.AREA, self.RATIO, self.YAW, self.V_X, self.V_Y = range(7)
+        self.P_X, self.P_Y, self.AREA, self.RATIO, self.YAW, self.HEIGHT, self.V_X, self.V_Y, self.RoC_AREA, self.dW_YAW = range(
+            10)
         # state_vec = [x_pos, y_pos, x*y, w/h, yaw_angle, x_vel, y_vel]^T
 
         # why is area a constant velocity model?
-        self.kf.F = np.array([[1, 0, 0, 0, 0, dt, 0, 0, 0],
-                              [0, 1, 0, 0, 0, 0, dt, 0, 0],
-                              [0, 0, 1, 0, 0, 0, 0, dt, 0],
-                              [0, 0, 0, 1, 0, 0, 0, 0, 0],
-                              [0, 0, 0, 0, 1, 0, 0, 0, dt],
-                              [0, 0, 0, 0, 0, 1, 0, 0, 0],
-                              [0, 0, 0, 0, 0, 0, 1, 0, 0],
-                              [0, 0, 0, 0, 0, 0, 0, 1, 0],
-                              [0, 0, 0, 0, 0, 0, 0, 0, 1]])
+        self.kf.F = np.array([[1, 0, 0, 0, 0, 0, dt, 0, 0, 0],  # P_X
+                              [0, 1, 0, 0, 0, 0, 0, dt, 0, 0],  # P_Y
+                              [0, 0, 1, 0, 0, 0, 0, 0, 0, 0],  # AREA
+                              [0, 0, 0, 1, 0, 0, 0, 0, 0, 0],   # RATIO
+                              [0, 0, 0, 0, 1, 0, 0, 0, 0, dt],  # YAW
+                              [0, 0, 0, 0, 0, 1, 0, 0, 0, 0],   # HEIGHT
+                              [0, 0, 0, 0, 0, 0, 1, 0, 0, 0],   # V_X
+                              [0, 0, 0, 0, 0, 0, 0, 1, 0, 0],   # V_Y
+                              [0, 0, 0, 0, 0, 0, 0, 0, 1, 0],   # RoC_AREA
+                              [0, 0, 0, 0, 0, 0, 0, 0, 0, 1]])  # dW_YAW
 
         self.kf.H = np.array(
-            [[1, 0, 0, 0, 0, 0, 0, 0, 0],
-             [0, 1, 0, 0, 0, 0, 0, 0, 0],
-             [0, 0, 1, 0, 0, 0, 0, 0, 0],
-             [0, 0, 0, 1, 0, 0, 0, 0, 0],
-             [0, 0, 0, 0, 1, 0, 0, 0, 0]])
+            [[1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+             [0, 1, 0, 0, 0, 0, 0, 0, 0, 0],
+             [0, 0, 1, 0, 0, 0, 0, 0, 0, 0],
+             [0, 0, 0, 1, 0, 0, 0, 0, 0, 0],
+             [0, 0, 0, 0, 1, 0, 0, 0, 0, 0],
+             [0, 0, 0, 0, 0, 1, 0, 0, 0, 0]])
 
         self.kf.R[2:, 2:] *= 10.
-        self.kf.P[5:, 5:] *= 1000.  # give high uncertainty to the unobservable initial velocities
+        self.kf.P[6:, 6:] *= 1000.  # give high uncertainty to the unobservable initial velocities
         self.kf.P *= 10.
-        self.kf.Q[-1, -1] *= 0.01
-        self.kf.Q[5:, 5:] *= 0.01
 
-        self.kf.x[:5] = np.expand_dims(z, axis=1)
+        self.kf.Q[-1, -1] *= 0.01
+        self.kf.Q[6:, 6:] *= 0.01
+
+        self.kf.x[:dim_z] = np.expand_dims(z, axis=1)
 
         self.time_since_update = 0
         self.id = KalmanBoxTracker.count
@@ -102,6 +107,8 @@ class KalmanBoxTracker(object):
         self.hit_streak = 0
         self.age = 0
         self.initialized = False
+        self.dt = dt
+        self.dim_z = dim_z
 
     def update(self, z):
         """
@@ -117,10 +124,6 @@ class KalmanBoxTracker(object):
         """
         Advances the state vector and returns the predicted bounding box estimate.
         """
-        # If area + velocity of the area is negative, make the velovity negative
-        # this needs to be done for any state that must be != 0
-        if ((self.kf.x[7] + self.kf.x[2]) <= 0):
-            self.kf.x[7] *= 0.0
         self.kf.predict()
         self.age += 1
         if (self.time_since_update > 0):
@@ -204,7 +207,7 @@ class Sort(object):
         self.iou_threshold = iou_threshold
         self.trackers = []
         self.frame_count = 0
-        self.dim_z = 5
+        self.dim_z = 6
         self.dt = dt
 
         # When true Kalman predict results will be included in the output
@@ -230,7 +233,7 @@ class Sort(object):
             pos = self.trackers[t].predict()
             trk[:] = np.array(
                 (pos[0], pos[1], pos[2], pos[3], pos[4])).reshape(-1,)
-            if (np.any(np.isnan(pos))):
+            if (np.any(np.isnan(pos)) or (pos[2] < 0.0) or (pos[3] < 0.0)):
                 to_del.append(t)
         trks = np.ma.compress_rows(np.ma.masked_invalid(trks))
         for t in reversed(to_del):
@@ -246,7 +249,7 @@ class Sort(object):
 
         # create and initialise new trackers for unmatched detections
         for i in unmatched_dets:
-            trk = KalmanBoxTracker(dets[i, :], dt=self.dt)
+            trk = KalmanBoxTracker(dets[i, :], dt=self.dt, dim_z=self.dim_z)
             self.trackers.append(trk)
         i = len(self.trackers)
         for trk in reversed(self.trackers):
@@ -254,8 +257,9 @@ class Sort(object):
             if ((trk.time_since_update <= self.max_output_age) and (trk.hit_streak >= self.min_hits or self.frame_count <= self.min_hits or trk.initialized)):
                 # Track is iniliated after min consecutive hits
                 trk.initialized = True
-    
-                output = np.array([state[trk.P_X] , state[trk.P_Y], state[trk.AREA], state[trk.RATIO], state[trk.YAW]])
+
+                output = np.array([state[trk.P_X], state[trk.P_Y],
+                                  state[trk.AREA], state[trk.RATIO], state[trk.YAW], state[trk.HEIGHT]])
                 # +1 to the ID as MOT benchmark 1-based index
                 ret.append(np.append(output, trk.id + 1).reshape(1, -1))
             i -= 1
