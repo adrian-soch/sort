@@ -66,20 +66,17 @@ class KalmanBoxTracker(object):
         # define constant velocity model
         self.kf = KalmanFilter(dim_x=10, dim_z=dim_z)
 
-        self.P_X, self.P_Y, self.AREA, self.RATIO, self.YAW, self.HEIGHT, self.V_X, self.V_Y, self.RoC_AREA, self.dW_YAW = range(
+        self.P_X, self.P_Y, self.AREA, self.RATIO, self.YAW, self.HEIGHT, self.V_X, self.V_Y, self.P_Z, self.dW_YAW = range(
             10)
-        # state_vec = [x_pos, y_pos, x*y, w/h, yaw_angle, x_vel, y_vel]^T
-
-        # why is area a constant velocity model?
         self.kf.F = np.array([[1, 0, 0, 0, 0, 0, dt, 0, 0, 0],  # P_X
                               [0, 1, 0, 0, 0, 0, 0, dt, 0, 0],  # P_Y
-                              [0, 0, 1, 0, 0, 0, 0, 0, 0, 0],  # AREA
+                              [0, 0, 1, 0, 0, 0, 0, 0, 0, 0],   # AREA
                               [0, 0, 0, 1, 0, 0, 0, 0, 0, 0],   # RATIO
                               [0, 0, 0, 0, 1, 0, 0, 0, 0, dt],  # YAW
                               [0, 0, 0, 0, 0, 1, 0, 0, 0, 0],   # HEIGHT
                               [0, 0, 0, 0, 0, 0, 1, 0, 0, 0],   # V_X
                               [0, 0, 0, 0, 0, 0, 0, 1, 0, 0],   # V_Y
-                              [0, 0, 0, 0, 0, 0, 0, 0, 1, 0],   # RoC_AREA
+                              [0, 0, 0, 0, 0, 0, 0, 0, 1, 0],   # P_Z
                               [0, 0, 0, 0, 0, 0, 0, 0, 0, 1]])  # dW_YAW
 
         self.kf.H = np.array(
@@ -88,14 +85,15 @@ class KalmanBoxTracker(object):
              [0, 0, 1, 0, 0, 0, 0, 0, 0, 0],
              [0, 0, 0, 1, 0, 0, 0, 0, 0, 0],
              [0, 0, 0, 0, 1, 0, 0, 0, 0, 0],
-             [0, 0, 0, 0, 0, 1, 0, 0, 0, 0]])
+             [0, 0, 0, 0, 0, 1, 0, 0, 0, 0],
+             [0, 0, 0, 0, 0, 0, 0, 0, 1, 0]])
 
-        self.kf.R[2:, 2:] *= 10.
-        self.kf.P[6:, 6:] *= 1000.  # give high uncertainty to the unobservable initial velocities
-        self.kf.P *= 10.
+        self.kf.R *= 10.
+        self.kf.P[6:, 6:] *= 100.  # give high uncertainty to the unobservable initial velocities
+        self.kf.P *= 100.
 
-        self.kf.Q[-1, -1] *= 0.01
-        self.kf.Q[6:, 6:] *= 0.01
+        self.kf.Q[-1, -1] *= 0.15
+        self.kf.Q[6:, 6:] *= 0.15
 
         self.kf.x[:dim_z] = np.expand_dims(z, axis=1)
 
@@ -207,7 +205,7 @@ class Sort(object):
         self.iou_threshold = iou_threshold
         self.trackers = []
         self.frame_count = 0
-        self.dim_z = 6
+        self.dim_z = 7
         self.dt = dt
 
         # When true Kalman predict results will be included in the output
@@ -226,18 +224,18 @@ class Sort(object):
         """
         self.frame_count += 1
         # get predicted locations from existing trackers.
-        trks = np.zeros((len(self.trackers), 5))
+        trks = np.zeros((len(self.trackers), 10))
         to_del = []
         ret = []
         for t, trk in enumerate(trks):
             pos = self.trackers[t].predict()
-            trk[:] = np.array(
-                (pos[0], pos[1], pos[2], pos[3], pos[4])).reshape(-1,)
-            if (np.any(np.isnan(pos)) or (pos[2] < 0.0) or (pos[3] < 0.0)):
+            trk[:] = np.array((pos)).reshape(-1,)
+            if (np.any(np.isnan(pos)) or (pos[2] <= 0.0) or (pos[3] < 0.0)):
                 to_del.append(t)
         trks = np.ma.compress_rows(np.ma.masked_invalid(trks))
         for t in reversed(to_del):
             self.trackers.pop(t)
+
         matched, unmatched_dets, unmatched_trks = associate_detections_to_trackers(
             dets, trks, self.iou_threshold)
 
@@ -258,7 +256,7 @@ class Sort(object):
                 # Track is iniliated after min consecutive hits
                 trk.initialized = True
 
-                output = np.array([state[trk.P_X], state[trk.P_Y],
+                output = np.array([state[trk.P_X], state[trk.P_Y], state[trk.P_Z],
                                   state[trk.AREA], state[trk.RATIO], state[trk.YAW], state[trk.HEIGHT]])
                 # +1 to the ID as MOT benchmark 1-based index
                 ret.append(np.append(output, trk.id + 1).reshape(1, -1))
