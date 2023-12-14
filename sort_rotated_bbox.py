@@ -68,7 +68,6 @@ class KalmanBoxTracker(object):
 
         self.P_X, self.P_Y, self.AREA, self.RATIO, self.YAW, self.HEIGHT, self.V_X, self.V_Y, self.RoC_AREA, self.dW_YAW = range(
             10)
-        # state_vec = [x_pos, y_pos, x*y, w/h, yaw_angle, x_vel, y_vel]^T
 
         # why is area a constant velocity model?
         self.kf.F = np.array([[1, 0, 0, 0, 0, 0, dt, 0, 0, 0],  # P_X
