@@ -96,7 +96,7 @@ class KalmanBoxTracker(object):
         self.kf.Q[-1, -1] *= 0.01
         self.kf.Q[6:, 6:] *= 0.01
 
-        self.kf.x[:dim_z] = np.expand_dims(z, axis=1)
+        self.kf.x[:dim_z] = np.expand_dims(z[:dim_z], axis=1)
 
         self.time_since_update = 0
         self.id = KalmanBoxTracker.count
@@ -108,6 +108,7 @@ class KalmanBoxTracker(object):
         self.initialized = False
         self.dt = dt
         self.dim_z = dim_z
+        self.obj_class = z[dim_z]
 
     def update(self, z):
         """
@@ -117,7 +118,7 @@ class KalmanBoxTracker(object):
         self.history = []
         self.hits += 1
         self.hit_streak += 1
-        self.kf.update(z)
+        self.kf.update(z[:self.dim_z])
 
     def predict(self):
         """
@@ -260,11 +261,11 @@ class Sort(object):
                 output = np.array([state[trk.P_X], state[trk.P_Y],
                                   state[trk.AREA], state[trk.RATIO], state[trk.YAW], state[trk.HEIGHT]])
                 # +1 to the ID as MOT benchmark 1-based index
-                ret.append(np.append(output, trk.id + 1).reshape(1, -1))
+                ret.append(np.append(output, [trk.id + 1, trk.obj_class]).reshape(1, -1))
             i -= 1
             # remove dead tracklet
             if (trk.time_since_update > self.max_age):
                 self.trackers.pop(i)
         if (len(ret) > 0):
             return np.concatenate(ret)
-        return np.empty((0, self.dim_z + 1))
+        return np.empty((0, self.dim_z + 2))
